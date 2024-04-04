@@ -30,6 +30,7 @@ parser.add_argument("--method_name",type=str,default=BLIP_DIFFUSION)
 parser.add_argument("--src_dataset",type=str,default="jlbaker361/league-optimal-prompt")
 parser.add_argument("--num_inference_steps",type=int,default=30)
 parser.add_argument("--image_dir",type=str,default="/scratch/jlb638/prompt-images")
+parser.add_argument("--convergence_scale",type=float,default=0.75)
 
 def main(args):
     accelerator=Accelerator(log_with="wandb")
