@@ -21,6 +21,7 @@ import numpy as np
 from peft import LoraConfig, get_peft_model
 from aesthetic_reward import get_aesthetic_scorer
 from chosen_helpers import get_hidden_states,get_best_cluster_kmeans,get_init_dist,loop
+import gc
 
 def evaluate_one_sample(
         method_name:str,
@@ -168,4 +169,11 @@ def evaluate_one_sample(
     metric_dict[AESTHETIC_SCORE]=np.mean(
         [aesthetic_scorer(evaluation_image).cpu().numpy()[0] for evaluation_image in evaluation_image_list]
     )
+    for metric in METRIC_LIST:
+        if metric not in metric_dict:
+            metric_dict[metric]=0.0
+    accelerator.free_memory()
+    torch.cuda.empty_cache()
+    gc.collect()
+    unet=vae=tokenizer=text_encoder=image_encoder=blip_diffusion_pipe=pipeline=clip_model=optimizer=None
     return metric_dict,evaluation_image_list
