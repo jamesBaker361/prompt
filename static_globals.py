@@ -4,8 +4,9 @@ RIVAL="rival"
 IP_ADAPTER="adapter"
 FACE_IP_ADAPTER="face_adapter"
 CHOSEN="chosen"
+INSTANT="instant"
 
-METHOD_LIST=[BLIP_DIFFUSION, ELITE, RIVAL,IP_ADAPTER,FACE_IP_ADAPTER,CHOSEN]
+METHOD_LIST=[BLIP_DIFFUSION, ELITE, RIVAL,IP_ADAPTER,FACE_IP_ADAPTER,CHOSEN,INSTANT]
 
 NEGATIVE="over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
 
