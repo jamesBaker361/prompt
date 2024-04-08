@@ -7,6 +7,9 @@ cache_dir="/scratch/jlb638/trans_cache"
 os.environ["TRANSFORMERS_CACHE"]=cache_dir
 os.environ["HF_HOME"]=cache_dir
 os.environ["HF_HUB_CACHE"]=cache_dir
+os.environ["WANDB_DIR"]="/scratch/jlb638/wandb"
+os.environ["WANDB_CACHE_DIR"]="/scratch/jlb638/wandb_cache"
+from numpy.linalg import norm
 import torch
 torch.hub.set_dir("/scratch/jlb638/torch_hub_cache")
 from diffusers.pipelines import BlipDiffusionPipeline
@@ -22,6 +25,11 @@ from peft import LoraConfig, get_peft_model
 from aesthetic_reward import get_aesthetic_scorer
 from chosen_helpers import get_hidden_states,get_best_cluster_kmeans,get_init_dist,loop
 import gc
+from dvlab.rival.test_variation_sdv1 import make_eval_image
+from instant.infer import instant_generate_one_sample
+
+def cos_sim(vector_i,vector_j)->float:
+    return np.dot(vector_i,vector_j)/(norm(vector_i)*norm(vector_j))
 
 def evaluate_one_sample(
         method_name:str,
@@ -34,7 +42,12 @@ def evaluate_one_sample(
         n_img_chosen:int,
         target_cluster_size:int,
         min_cluster_size:int,
-        convergence_scale:float
+        convergence_scale:float,
+        inf_config:str,
+        is_half:bool,
+        seed:int,
+        inner_round:int,
+        editing_early_steps:int
 )->dict:
     method_name=method_name.strip()
     if method_name == BLIP_DIFFUSION:
@@ -57,7 +70,19 @@ def evaluate_one_sample(
     elif method_name==ELITE:
         pass
     elif method_name==RIVAL:
-        pass
+        evaluation_image_list=[
+            make_eval_image(inf_config,accelerator,is_half,
+                            "runwayml/stable-diffusion-v1-5",
+                            evaluation_prompt.format(subject),
+                            NEGATIVE,src_image,seed,inner_round,
+                            num_inference_steps,editing_early_steps) for evaluation_prompt in evaluation_prompt_list
+        ]
+    elif method_name==INSTANT:
+        evaluation_image_list=[
+            instant_generate_one_sample(src_image,evaluation_prompt.format(subject),
+                                        NEGATIVE, num_inference_steps, 
+                                        accelerator ) for evaluation_prompt in evaluation_prompt_list
+        ]
     elif method_name==IP_ADAPTER or method_name==FACE_IP_ADAPTER:
         pipeline=StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5",safety_checker=None)
         unet=pipeline.unet
@@ -90,7 +115,7 @@ def evaluate_one_sample(
         vae=pipeline.vae
         tokenizer=pipeline.tokenizer
         text_encoder=pipeline.text_encoder
-        for model in [vae,unet,text_encoder, image_encoder]:
+        for model in [vae,unet,text_encoder]:
             model.requires_grad_(False)
         config = LoraConfig(
             r=4,
@@ -101,6 +126,7 @@ def evaluate_one_sample(
         unet = get_peft_model(unet, config)
         unet.train()
         unet.print_trainable_parameters()
+        trainable_parameters=[]
         for model in [vae,unet,text_encoder]:
             trainable_parameters+=[p for p in model.parameters() if p.requires_grad]
         optimizer = torch.optim.AdamW(
@@ -151,16 +177,35 @@ def evaluate_one_sample(
         message=f"no support for {method_name} try one of "+" ".join(METHOD_LIST)
         raise Exception(message)
 
+    print(evaluation_image_list)
+    #METRIC_LIST=[PROMPT_SIMILARITY, IDENTITY_CONSISTENCY, TARGET_SIMILARITY, AESTHETIC_SCORE, IMAGE_REWARD]
     metric_dict={}
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    clip_inputs=clip_processor(text=evaluation_prompt_list, images=evaluation_image_list, return_tensors="pt", padding=True)
+    clip_inputs=clip_processor(text=evaluation_prompt_list, images=evaluation_image_list+[src_image], return_tensors="pt", padding=True)
 
     outputs = clip_model(**clip_inputs)
     text_embed_list=outputs.text_embeds.detach().numpy()
-    image_embed_list=outputs.image_embeds.detach().numpy()
+    image_embed_list=outputs.image_embeds.detach().numpy()[:-1]
+    src_image_embed=outputs.image_embeds.detach().numpy()[-1]
     ir_model=image_reward.load("ImageReward-v1.0",download_root=reward_cache)
 
+    identity_consistency_list=[]
+    target_similarity_list=[]
+    prompt_similarity_list=[]
+    for i in range(len(image_embed_list)):
+        image_embed=image_embed_list[i]
+        text_embed=text_embed_list[i]
+        target_similarity_list.append(cos_sim(image_embed,src_image_embed))
+        prompt_similarity_list.append(cos_sim(image_embed, text_embed))
+        for j in range(i+1, len(image_embed_list)):
+            vector_j=image_embed_list[j]
+            identity_consistency_list.append(cos_sim(image_embed,vector_j))
+
+
+    metric_dict[IDENTITY_CONSISTENCY]=np.mean(identity_consistency_list)
+    metric_dict[TARGET_SIMILARITY]=np.mean(target_similarity_list)
+    metric_dict[PROMPT_SIMILARITY]=np.mean(prompt_similarity_list)
     #for evaluation_image,evaluation_prompt in zip(evaluation_image_list, evaluation_prompt_list):
     metric_dict[IMAGE_REWARD]=np.mean(
         [ir_model.score(evaluation_prompt.format(subject),evaluation_image) for evaluation_prompt,evaluation_image in zip(evaluation_prompt_list, evaluation_image_list) ]
