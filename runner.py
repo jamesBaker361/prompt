@@ -7,6 +7,8 @@ cache_dir="/scratch/jlb638/trans_cache"
 os.environ["TRANSFORMERS_CACHE"]=cache_dir
 os.environ["HF_HOME"]=cache_dir
 os.environ["HF_HUB_CACHE"]=cache_dir
+os.environ["WANDB_DIR"]="/scratch/jlb638/wandb"
+os.environ["WANDB_CACHE_DIR"]="/scratch/jlb638/wandb_cache"
 import torch
 torch.hub.set_dir("/scratch/jlb638/torch_hub_cache")
 from diffusers.pipelines import BlipDiffusionPipeline
@@ -23,6 +25,7 @@ from run_and_evaluate import evaluate_one_sample
 from datasets import load_dataset
 import wandb
 from gpu import print_details
+import gc
 
 parser=argparse.ArgumentParser()
 
@@ -35,6 +38,11 @@ parser.add_argument("--convergence_scale",type=float,default=0.75)
 parser.add_argument("--n_img_chosen",type=int,default=64)
 parser.add_argument("--target_cluster_size",type=int,default=10)
 parser.add_argument("--min_cluster_size",type=int,default=5)
+parser.add_argument("--inf_config", type=str, default="dvlab/configs/rival_variation.json")
+parser.add_argument("--inner_round", type=int, default=1, help="number of images per reference")
+parser.add_argument("--is_half", type=bool, default=False)
+parser.add_argument("--seed",type=int,default=0)
+parser.add_argument("--editing_early_steps", type=int, default=1000)
 
 def main(args):
     accelerator=Accelerator(log_with="wandb")
@@ -48,6 +56,9 @@ def main(args):
         " {} at the beach"
     ]
     for j,row in enumerate(dataset):
+        gc.collect()
+        accelerator.free_memory()
+        torch.cuda.empty_cache()
         if j>args.limit:
             break
         subject=row["subject"]
@@ -63,9 +74,14 @@ def main(args):
                                                               args.n_img_chosen,
                                                               args.target_cluster_size,
                                                               args.min_cluster_size,
-                                                              args.convergence_scale)
+                                                              args.convergence_scale,
+                                                              args.inf_config,
+                                                                args.is_half,
+                                                                args.seed,
+                                                                args.inner_round,
+                                                                args.editing_early_steps)
         os.makedirs(f"{args.image_dir}/{label}/",exist_ok=True)
-        for i,image in evaluation_image_list:
+        for i,image in enumerate(evaluation_image_list):
             path=f"{args.image_dir}/{label}/{args.method_name}_{i}.png"
             image.save(path)
             accelerator.log({
@@ -74,10 +90,10 @@ def main(args):
         for metric,value in metric_dict.items():
             aggregate_dict[metric].append(value)
         print(f"after {j} samples:")
-        for metric,value_list in aggregate_dict:
+        for metric,value_list in aggregate_dict.items():
             print(f"\t{metric} {np.mean(value_list)}")
         columns=METRIC_LIST
-        data=[v for v in aggregate_dict.values()]
+        data=np.transpose([v for v in aggregate_dict.values()])
         accelerator.get_tracker("wandb").log({
             "result_table":wandb.Table(columns=columns,data=data)
         })
