@@ -43,6 +43,11 @@ parser.add_argument("--inner_round", type=int, default=1, help="number of images
 parser.add_argument("--is_half", type=bool, default=False)
 parser.add_argument("--seed",type=int,default=0)
 parser.add_argument("--editing_early_steps", type=int, default=1000)
+parser.add_argument("--train_text_encoder",action="store_true",help="ddpo train text encoder")
+parser.add_argument("--train_text_encoder_embeddings",action="store_true",help="ddpo train text encoder like for text inversion")
+parser.add_argument("--train_unet",action="store_true",help="ddpo whether to train unet")
+parser.add_argument("--use_lora_text_encoder",action="store_true",help="ddpo use lora if train_text_encoder=True")
+parser.add_argument("--use_lora",action="store_true",help="unet ddpo use lora")
 
 def main(args):
     accelerator=Accelerator(log_with="wandb")
@@ -53,13 +58,31 @@ def main(args):
         metric:[] for metric in METRIC_LIST
     }
     evaluation_prompt_list=[
-        " {} at the beach"
+        "  {} at the beach",
+        "  {} in the jungle",
+        "  {} in the snow",
+        "  {} in the street",
+        "  {} with a city in the background",
+        "  {} with a mountain in the background",
+        "  {} with the Eiffel Tower in the background",
+        "  {} near the Statue of Liberty",
+        "  {} near the Sydney Opera House",
+        "  {} floating on top of water",
+        "  {} eating a burger",
+        "  {} drinking a beer",
+        "  {} wearing a blue hat",
+        "  {} wearing sunglasses",
+        "  {} playing with a ball",
+        "  {} as a police officer"
     ]
+    len_dataset=len([r for r in dataset])
+    print("len",len_dataset)
     for j,row in enumerate(dataset):
         gc.collect()
         accelerator.free_memory()
         torch.cuda.empty_cache()
         if j>args.limit:
+            print("reached limit")
             break
         subject=row["subject"]
         label=row["label"]
@@ -92,13 +115,14 @@ def main(args):
         print(f"after {j} samples:")
         for metric,value_list in aggregate_dict.items():
             print(f"\t{metric} {np.mean(value_list)}")
-        columns=METRIC_LIST
-        data=np.transpose([v for v in aggregate_dict.values()])
-        accelerator.get_tracker("wandb").log({
-            "result_table":wandb.Table(columns=columns,data=data)
-        })
+    columns=METRIC_LIST
+    data=np.transpose([v for v in aggregate_dict.values()])
+    accelerator.get_tracker("wandb").log({
+        "result_table":wandb.Table(columns=columns,data=data)
+    })
 if __name__=='__main__':
     print_details()
     args=parser.parse_args()
     print(args)
     main(args)
+    print("all done!")
