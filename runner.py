@@ -102,7 +102,13 @@ def main(args):
                                                                 args.is_half,
                                                                 args.seed,
                                                                 args.inner_round,
-                                                                args.editing_early_steps)
+                                                                args.editing_early_steps,
+                                                                args.train_text_encoder,
+                                                                args.train_text_encoder_embeddings,
+                                                                args.train_unet,
+                                                                args.use_lora_text_encoder,
+                                                                args.use_lora
+                                                                )
         os.makedirs(f"{args.image_dir}/{label}/",exist_ok=True)
         for i,image in enumerate(evaluation_image_list):
             path=f"{args.image_dir}/{label}/{args.method_name}_{i}.png"

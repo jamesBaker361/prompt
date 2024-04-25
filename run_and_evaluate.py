@@ -47,7 +47,12 @@ def evaluate_one_sample(
         is_half:bool,
         seed:int,
         inner_round:int,
-        editing_early_steps:int
+        editing_early_steps:int,
+        train_text_encoder:bool,
+        train_text_encoder_embeddings:bool,
+        train_unet:bool,
+        use_lora_text_encoder:bool,
+        use_lora:bool
 )->dict:
     method_name=method_name.strip()
     if method_name == BLIP_DIFFUSION:
