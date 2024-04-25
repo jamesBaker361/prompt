@@ -23,7 +23,7 @@ from transformers import CLIPProcessor, CLIPModel,ViTImageProcessor, ViTModel
 import numpy as np
 from peft import LoraConfig, get_peft_model
 from aesthetic_reward import get_aesthetic_scorer
-from chosen_helpers import get_hidden_states,get_best_cluster_kmeans,get_init_dist,loop
+from chosen_helpers import get_hidden_states,get_best_cluster_kmeans,get_init_dist,loop,get_top_k,generate_with_style
 import gc
 from dvlab.rival.test_variation_sdv1 import make_eval_image
 from instant.infer import instant_generate_one_sample
@@ -107,7 +107,9 @@ def evaluate_one_sample(
                     safety_checker=None,
                     ip_adapter_image=src_image).images[0] for evaluation_prompt in evaluation_prompt_list
         ]
-    elif method_name==CHOSEN:
+    elif method_name==DDPO:
+        pass
+    elif method_name in [CHOSEN,CHOSEN_K,CHOSEN_K_STYLE,CHOSEN_STYLE]:
         vit_processor = ViTImageProcessor.from_pretrained('facebook/dino-vitb16')
         vit_model = ViTModel.from_pretrained('facebook/dino-vitb16')
         pipeline=StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5",safety_checker=None)
@@ -139,18 +141,24 @@ def evaluate_one_sample(
             unet,text_encoder,vae,tokenizer
         )
         n_clusters=n_img_chosen // target_cluster_size
-        image_list=[
+        if method_name in [CHOSEN_K, CHOSEN]:
+            image_list=[
                 pipeline(text_prompt,negative_prompt=NEGATIVE,num_inference_steps=num_inference_steps,safety_checker=None).images[0] for _ in range(n_img_chosen)]
+        elif method_name in [CHOSEN_K_STYLE, CHOSEN_STYLE]:
+            image_list=[
+                generate_with_style(pipeline,text_prompt=text_prompt,negative_prompt=NEGATIVE,num_inference_steps=num_inference_steps,src_image=src_image) for _ in range(n_img_chosen)
+            ]
         print("generated initial sets of images")
         last_hidden_states=get_hidden_states(image_list,vit_processor,vit_model)
-        print("last hidden staes")
         init_dist=get_init_dist(last_hidden_states)
-        print("init_dist")
         pairwise_distances=init_dist
         iteration=0
         while pairwise_distances>=convergence_scale*init_dist and iteration<10:
             iteration+=1
-            valid_image_list, pairwise_distances=get_best_cluster_kmeans(image_list, n_clusters, min_cluster_size, vit_processor, vit_model)
+            if method_name in [CHOSEN, CHOSEN_STYLE]:
+                valid_image_list, centroid_distances=get_best_cluster_kmeans(image_list, n_clusters, min_cluster_size, vit_processor, vit_model)
+            elif method_name in [CHOSEN_K, CHOSEN_K_STYLE]:
+                valid_image_list=get_top_k(src_image, image_list, vit_processor, vit_model,target_cluster_size)
             text_prompt_list=[text_prompt]*len(valid_image_list)
             pipeline=loop(
                 valid_image_list,
@@ -166,7 +174,16 @@ def evaluate_one_sample(
                 noise_offset=0.0,
                 max_grad_norm=1.0
             )
-            image_list=[pipeline(text_prompt,num_inference_steps=num_inference_steps,safety_checker=None).images[0] for _ in range(n_img_chosen) ]
+            if method_name in [CHOSEN_K, CHOSEN]:
+                image_list=[
+                    pipeline(text_prompt,negative_prompt=NEGATIVE,num_inference_steps=num_inference_steps,safety_checker=None).images[0] for _ in range(n_img_chosen)]
+            elif method_name in [CHOSEN_K_STYLE, CHOSEN_STYLE]:
+                image_list=[
+                    generate_with_style(pipeline,text_prompt=text_prompt,negative_prompt=NEGATIVE,num_inference_steps=num_inference_steps,src_image=src_image) for _ in range(n_img_chosen)
+                ]
+            last_hidden_states=get_hidden_states(image_list,vit_processor,vit_model)
+            init_dist=get_init_dist(last_hidden_states)
+            pairwise_distances=init_dist
         evaluation_image_list=[
             pipeline(evaluation_prompt.format(text_prompt),
                     num_inference_steps=num_inference_steps,
@@ -199,8 +216,10 @@ def evaluate_one_sample(
         target_similarity_list.append(cos_sim(image_embed,src_image_embed))
         prompt_similarity_list.append(cos_sim(image_embed, text_embed))
         for j in range(i+1, len(image_embed_list)):
+            #print(i,j)
             vector_j=image_embed_list[j]
-            identity_consistency_list.append(cos_sim(image_embed,vector_j))
+            sim=cos_sim(image_embed,vector_j)
+            identity_consistency_list.append(sim)
 
 
     metric_dict[IDENTITY_CONSISTENCY]=np.mean(identity_consistency_list)
